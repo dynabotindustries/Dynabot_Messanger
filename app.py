@@ -2,12 +2,13 @@ import streamlit as st
 import sqlite3
 import base64
 import datetime
+import time
 
 # Initialize session state variables
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# Database initialization
+# Initialize database
 def init_db():
     conn = sqlite3.connect("dynabot_messenger.db")
     c = conn.cursor()
@@ -19,10 +20,12 @@ def init_db():
                     id INTEGER PRIMARY KEY,
                     user TEXT,
                     message TEXT,
+                    image BLOB,
                     timestamp TEXT)''')
     conn.commit()
     conn.close()
 
+# Function to authenticate user
 def authenticate_user(username, password):
     conn = sqlite3.connect("dynabot_messenger.db")
     c = conn.cursor()
@@ -31,6 +34,7 @@ def authenticate_user(username, password):
     conn.close()
     return user
 
+# Function to register new user
 def register_user(username, password):
     conn = sqlite3.connect("dynabot_messenger.db")
     c = conn.cursor()
@@ -43,14 +47,19 @@ def register_user(username, password):
         conn.close()
         return False
 
-def add_message(user, message):
+# Add new message to database
+def add_message(user, message, image=None):
     conn = sqlite3.connect("dynabot_messenger.db")
     c = conn.cursor()
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO messages (user, message, timestamp) VALUES (?, ?, ?)", (user, message, timestamp))
+    if image:
+        c.execute("INSERT INTO messages (user, message, image, timestamp) VALUES (?, ?, ?, ?)", (user, message, image, timestamp))
+    else:
+        c.execute("INSERT INTO messages (user, message, image, timestamp) VALUES (?, ?, ?, ?)", (user, message, None, timestamp))
     conn.commit()
     conn.close()
 
+# Retrieve all messages from database
 def get_messages():
     conn = sqlite3.connect("dynabot_messenger.db")
     c = conn.cursor()
@@ -59,12 +68,35 @@ def get_messages():
     conn.close()
     return messages
 
+# Function to delete a message
 def delete_message(message_id):
     conn = sqlite3.connect("dynabot_messenger.db")
     c = conn.cursor()
     c.execute("DELETE FROM messages WHERE id = ?", (message_id,))
     conn.commit()
     conn.close()
+
+# Function to trigger browser notification
+def trigger_notification(message):
+    st.components.v1.html(f"""
+    <script>
+        if (Notification.permission === 'granted') {{
+            new Notification('New Message', {{
+                body: '{message}',
+                icon: 'https://your-icon-url.com/icon.png',
+            }});
+        }} else {{
+            Notification.requestPermission().then(function(permission) {{
+                if (permission === 'granted') {{
+                    new Notification('New Message', {{
+                        body: '{message}',
+                        icon: 'https://your-icon-url.com/icon.png',
+                    }});
+                }}
+            }});
+        }}
+    </script>
+    """, height=0, width=0)
 
 # Initialize the database
 init_db()
@@ -130,8 +162,11 @@ else:
     # Display messages
     messages = get_messages()
     for message in messages:
-        user, text, timestamp, message_id = message[1], message[2], message[3], message[0]
+        user, text, image, timestamp, message_id = message[1], message[2], message[3], message[4], message[0]
         st.markdown(f"**{user}**: {text} *({timestamp})*")
+        if image:
+            image_data = base64.b64encode(image).decode()
+            st.markdown(f'<img src="data:image/png;base64,{image_data}" width="200"/>', unsafe_allow_html=True)
         if user == st.session_state.user:
             if st.button(f"Remove", key=f"remove_{message_id}"):
                 delete_message(message_id)
@@ -154,7 +189,12 @@ else:
     st.subheader("Image Sharing (Paste Image)")
     uploaded_file = st.file_uploader("Upload an image")
     if uploaded_file is not None:
+        img_bytes = uploaded_file.read()
+        add_message(st.session_state.user, "Shared an image", img_bytes)
         st.image(uploaded_file)
-        add_message(st.session_state.user, f"Shared an image: {uploaded_file.name}")
 
-
+    # Trigger notification for new messages
+    if len(messages) > 0:
+        last_message = messages[-1][2]
+        if last_message != st.session_state.user:
+            trigger_notification(f"{last_message} sent a new message.")
